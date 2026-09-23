@@ -22,6 +22,9 @@ PARAMETERS = {
     'max_speed': 5.0,
     'min_speed': 0.4,
     'turn_slowdown': 0.65,
+    # Experimental Pure-Pursuit steering; keep the verified bearing mode by default.
+    'use_curvature_steering': False,
+    'curvature_lookahead': 0.65,
 }
 
 

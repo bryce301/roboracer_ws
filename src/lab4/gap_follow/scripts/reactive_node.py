@@ -113,6 +113,12 @@ class ReactiveFollowGap(Node):
         self.wheelbase = float(
             self.declare_parameter('wheelbase', 0.33).value
         )
+        self.use_curvature_steering = bool(
+            self.declare_parameter('use_curvature_steering', False).value
+        )
+        self.curvature_lookahead = float(
+            self.declare_parameter('curvature_lookahead', 0.65).value
+        )
         self.slow_clearance = float(
             self.declare_parameter('slow_clearance', 0.75).value
         )
@@ -246,6 +252,7 @@ class ReactiveFollowGap(Node):
                 or self.max_deceleration <= 0
                 or self.steering_time_constant < 0
                 or self.max_lateral_accel <= 0 or self.wheelbase <= 0
+                or self.curvature_lookahead <= 0
                 or not self.stop_distance < self.slow_clearance
                 or not self.slow_clearance < self.fast_clearance
                 or self.fast_clearance > self.max_range
@@ -776,8 +783,19 @@ class ReactiveFollowGap(Node):
             best_index,
             data.angle_increment,
         )
+        target_bearing = float(angles[best_index])
+        if self.use_curvature_steering:
+            # Pure-pursuit/bicycle-model steering.  Use a fixed lookahead
+            # distance so a far LiDAR return cannot make the turn too weak.
+            curvature = (
+                2.0 * np.sin(target_bearing) / self.curvature_lookahead
+            )
+            steering = float(np.arctan(self.wheelbase * curvature))
+        else:
+            # Verified baseline: direct target-bearing steering.
+            steering = target_bearing
         steering = float(np.clip(
-            angles[best_index], -self.max_steering, self.max_steering
+            steering, -self.max_steering, self.max_steering
         ))
         now = self.get_clock().now()
         if self.steering_time_constant > 0:
@@ -822,6 +840,7 @@ class ReactiveFollowGap(Node):
                 'FTG_DIAG '
                 f'forward={forward_clearance:.3f} '
                 f'target={target_clearance:.3f} '
+                f'mode={"curvature" if self.use_curvature_steering else "bearing"} '
                 f'turn_limit={preferred_speed:.3f} '
                 f'gap_limit={gap_speed:.3f} '
                 f'speed={speed:.3f} steering={steering:.3f}'
