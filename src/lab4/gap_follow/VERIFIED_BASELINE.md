@@ -42,3 +42,27 @@ launch files if a later tuning candidate is not as reliable.
   45.09 s, 42.14 s, 44.53 s.
 - `levine_obs`, `max_speed: 1.4`: one complete timed lap without collision;
   90.91 s.
+
+## 15 Hz gap-directed speed candidate
+
+The empty-map controller was retested after matching the simulator scan rate
+to the physical LiDAR's 15 Hz limit. Normal speed is based on clearance around
+the selected gap target; the narrow forward sector is retained only as an
+emergency stop check. Tight-corner speeds retain the previously verified
+3 m/s tuning while near-straight sections can use the 5 m/s maximum.
+
+```python
+{
+    'clearance_speed_gain': 1.0,
+    'corner_speed_reference': 3.0,
+    'max_speed': 5.0,
+    'min_speed': 0.4,
+    'turn_slowdown': 0.65,
+}
+```
+
+- Map: `levine_blocked`, counter-clockwise from `(-12.0, 0.0, 0.0)`.
+- Result: three consecutive laps, no collision or scan stall.
+- Lap times: 33.92 s, 34.27 s, 33.17 s.
+- Mean commanded speed: 2.14 m/s; maximum: 5.00 m/s.
+- Mean commanded speed while `abs(steering) >= 0.10`: 1.65 m/s.

@@ -18,6 +18,7 @@ EXECUTABLE = 'reactive_node.py'
 # e.g. {'max_speed': 6.0} or give it a full .yaml config file
 PARAMETERS = {
     'clearance_speed_gain': 1.0,
+    'corner_speed_reference': 3.0,
     'max_speed': 5.0,
     'min_speed': 0.4,
     'turn_slowdown': 0.65,

@@ -55,6 +55,12 @@ class ReactiveFollowGap(Node):
         self.turn_slowdown = float(
             self.declare_parameter('turn_slowdown', 0.65).value
         )
+        self.corner_speed_reference = float(
+            self.declare_parameter('corner_speed_reference', 0.0).value
+        )
+        self.straight_boost_angle = float(
+            self.declare_parameter('straight_boost_angle', 0.10).value
+        )
         self.simple_turn_slowdown = float(
             self.declare_parameter('simple_turn_slowdown', 0.35).value
         )
@@ -65,6 +71,35 @@ class ReactiveFollowGap(Node):
             self.declare_parameter(
                 'clearance_half_angle', np.deg2rad(10)
             ).value
+        )
+        self.target_clearance_half_angle = float(
+            self.declare_parameter(
+                'target_clearance_half_angle', np.deg2rad(5)
+            ).value
+        )
+        self.target_clearance_percentile = float(
+            self.declare_parameter('target_clearance_percentile', 20.0).value
+        )
+        self.gap_speed_near_distance = float(
+            self.declare_parameter('gap_speed_near_distance', 0.6).value
+        )
+        self.gap_speed_low_distance = float(
+            self.declare_parameter('gap_speed_low_distance', 1.2).value
+        )
+        self.gap_speed_medium_distance = float(
+            self.declare_parameter('gap_speed_medium_distance', 2.5).value
+        )
+        self.gap_speed_fast_distance = float(
+            self.declare_parameter('gap_speed_fast_distance', 4.5).value
+        )
+        self.gap_speed_low_fraction = float(
+            self.declare_parameter('gap_speed_low_fraction', 0.3).value
+        )
+        self.gap_speed_medium_fraction = float(
+            self.declare_parameter('gap_speed_medium_fraction', 0.6).value
+        )
+        self.diagnostics_enabled = bool(
+            self.declare_parameter('diagnostics_enabled', False).value
         )
         self.max_deceleration = float(
             self.declare_parameter('max_deceleration', 100.0).value
@@ -155,9 +190,17 @@ class ReactiveFollowGap(Node):
                   self.disparity_threshold,
                   self.vehicle_half_width, self.safety_margin,
                   self.min_gap_width, self.max_speed, self.min_speed,
-                  self.turn_slowdown, self.simple_turn_slowdown,
+                  self.turn_slowdown, self.corner_speed_reference,
+                  self.straight_boost_angle, self.simple_turn_slowdown,
                   self.clearance_speed_gain,
-                  self.clearance_half_angle,
+                  self.clearance_half_angle, self.target_clearance_half_angle,
+                  self.target_clearance_percentile,
+                  self.gap_speed_near_distance,
+                  self.gap_speed_low_distance,
+                  self.gap_speed_medium_distance,
+                  self.gap_speed_fast_distance,
+                  self.gap_speed_low_fraction,
+                  self.gap_speed_medium_fraction,
                   self.max_deceleration, self.steering_time_constant,
                   self.max_lateral_accel,
                   self.wheelbase, self.slow_clearance,
@@ -182,9 +225,24 @@ class ReactiveFollowGap(Node):
                 or self.min_gap_width < 0
                 or not 0 < self.min_speed <= self.max_speed
                 or not 0 <= self.turn_slowdown <= 1
+                or self.corner_speed_reference < 0
+                or self.corner_speed_reference > self.max_speed
+                or self.straight_boost_angle <= 0
                 or not 0 <= self.simple_turn_slowdown <= 1
                 or self.clearance_speed_gain <= 0
                 or not 0 < self.clearance_half_angle <= self.front_half_angle
+                or not 0 < self.target_clearance_half_angle
+                <= self.front_half_angle
+                or not 0 <= self.target_clearance_percentile <= 100
+                or not self.stop_distance < self.gap_speed_near_distance
+                or not self.gap_speed_near_distance
+                < self.gap_speed_low_distance
+                or not self.gap_speed_low_distance
+                < self.gap_speed_medium_distance
+                or not self.gap_speed_medium_distance
+                < self.gap_speed_fast_distance <= self.max_range
+                or not 0 < self.gap_speed_low_fraction
+                < self.gap_speed_medium_fraction < 1
                 or self.max_deceleration <= 0
                 or self.steering_time_constant < 0
                 or self.max_lateral_accel <= 0 or self.wheelbase <= 0
@@ -221,6 +279,7 @@ class ReactiveFollowGap(Node):
         self.mode_candidate_since_ns = None
         self.last_steering = 0.0
         self.last_control_time_ns = None
+        self.last_diagnostic_time_ns = None
         self.scan_watchdog = self.create_timer(0.1, self.check_scan_timeout)
 
     def preprocess_lidar(self, ranges):
@@ -501,6 +560,65 @@ class ReactiveFollowGap(Node):
         best_local = candidate_centers[best_candidate]
         return start_i + int(best_local)
 
+    def measure_target_clearance(self, ranges, start_i, end_i, target_i,
+                                 angle_increment):
+        """Measure robust clearance around the selected direction in its gap."""
+        half_width = max(1, int(np.ceil(
+            self.target_clearance_half_angle / angle_increment
+        )))
+        window_start = max(start_i, target_i - half_width)
+        window_end = min(end_i, target_i + half_width)
+        window = np.asarray(
+            ranges[window_start:window_end + 1], dtype=np.float64
+        )
+        valid = window[np.isfinite(window) & (window > 0)]
+        if valid.size == 0:
+            return 0.0
+        return float(np.percentile(
+            valid, self.target_clearance_percentile
+        ))
+
+    def calculate_gap_speed(self, target_clearance):
+        """Map clearance in the selected gap to speed, as recommended in L05."""
+        low_speed = max(
+            self.min_speed, self.gap_speed_low_fraction * self.max_speed
+        )
+        medium_speed = max(
+            low_speed, self.gap_speed_medium_fraction * self.max_speed
+        )
+        return float(np.interp(
+            target_clearance,
+            [
+                self.stop_distance,
+                self.gap_speed_near_distance,
+                self.gap_speed_low_distance,
+                self.gap_speed_medium_distance,
+                self.gap_speed_fast_distance,
+            ],
+            [
+                0.0,
+                self.min_speed,
+                low_speed,
+                medium_speed,
+                self.max_speed,
+            ],
+        ))
+
+    def calculate_turn_speed(self, steering):
+        """Keep proven corner speeds while allowing a smooth straight boost."""
+        reference = self.corner_speed_reference
+        if reference <= 0:
+            reference = self.max_speed
+        normalized_turn = min(1.0, abs(steering) / self.max_steering)
+        corner_speed = max(
+            self.min_speed,
+            reference * (1.0 - self.turn_slowdown * normalized_turn),
+        )
+        straight_boost = (self.max_speed - reference) * np.exp(
+            -(abs(steering) / self.straight_boost_angle) ** 2
+        )
+        return float(min(self.max_speed, corner_speed + straight_boost))
+
     @staticmethod
     def find_gap_center(start_i, end_i, ranges):
         """Return the center ray of a stable simple-mode gap."""
@@ -651,6 +769,13 @@ class ReactiveFollowGap(Node):
         if best_index is None:
             self.publish_stop()
             return
+        target_clearance = self.measure_target_clearance(
+            proc_ranges,
+            start_i,
+            end_i,
+            best_index,
+            data.angle_increment,
+        )
         steering = float(np.clip(
             angles[best_index], -self.max_steering, self.max_steering
         ))
@@ -680,22 +805,27 @@ class ReactiveFollowGap(Node):
             self.publish_drive(0.0, steering)
             return
 
-        turn_factor = (
-            1.0
-            - self.turn_slowdown * abs(steering) / self.max_steering
-        )
-        preferred_speed = max(self.min_speed, self.max_speed * turn_factor)
-        clearance_margin = max(
-            0.0, forward_clearance - self.stop_distance
-        )
-        clearance_speed = min(
-            self.clearance_speed_gain * clearance_margin,
-            np.sqrt(2 * self.max_deceleration * clearance_margin),
-        )
+        preferred_speed = self.calculate_turn_speed(steering)
+        gap_speed = self.calculate_gap_speed(target_clearance)
         if recovering:
             preferred_speed = self.recovery_speed
-        speed = min(preferred_speed, clearance_speed)
-        speed = max(self.min_motion_speed, speed)
+        speed = min(preferred_speed, gap_speed)
+        if speed > 0:
+            speed = max(self.min_motion_speed, speed)
+
+        if (self.diagnostics_enabled
+                and (self.last_diagnostic_time_ns is None
+                     or now.nanoseconds - self.last_diagnostic_time_ns
+                     >= 1_000_000_000)):
+            self.last_diagnostic_time_ns = now.nanoseconds
+            self.get_logger().info(
+                'FTG_DIAG '
+                f'forward={forward_clearance:.3f} '
+                f'target={target_clearance:.3f} '
+                f'turn_limit={preferred_speed:.3f} '
+                f'gap_limit={gap_speed:.3f} '
+                f'speed={speed:.3f} steering={steering:.3f}'
+            )
         self.publish_drive(speed, steering)
 
     def check_scan_timeout(self):
