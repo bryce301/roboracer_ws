@@ -1,0 +1,12 @@
+schema: "classroom50/repo-config/v1"
+classroom: "ese-6150"
+assignment: "lab-3-wall-following"
+owner:
+  username: "bryce301"
+  id: 301235182
+  accepted_at: "2026-09-09T20:02:30Z"
+source:
+  owner: "f1tenth"
+  owner_id: 38742763
+  repo: "f1tenth_lab3_template"
+  branch: "main"
