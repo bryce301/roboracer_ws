@@ -35,6 +35,9 @@ class ReactiveFollowGap(Node):
         self.planning_range = float(
             self.declare_parameter('planning_range', 3.0).value
         )
+        self.gap_distance_threshold = float(
+            self.declare_parameter('gap_distance_threshold', 2.5).value
+        )
         self.simple_planning_range = float(
             self.declare_parameter('simple_planning_range', 6.0).value
         )
@@ -224,6 +227,7 @@ class ReactiveFollowGap(Node):
                 or self.bubble_radius < 0
                 or self.bubble_count < 1
                 or not 0 < self.planning_range <= self.max_range
+                or not 0 < self.gap_distance_threshold <= self.max_range
                 or not self.planning_range <= self.simple_planning_range
                 <= self.max_range
                 or self.disparity_threshold < 0
@@ -772,7 +776,14 @@ class ReactiveFollowGap(Node):
                 self.publish_stop()
                 return
 
-        best_index = self.find_best_point(start_i, end_i, free_ranges)
+        # Lecture anti-wiggle strategy: cap distant depth differences and
+        # aim at the center of the selected drivable gap.
+        planning_ranges = np.minimum(
+            free_ranges, self.gap_distance_threshold
+        )
+        best_index = self.find_gap_center(
+            start_i, end_i, planning_ranges
+        )
         if best_index is None:
             self.publish_stop()
             return
